@@ -51,9 +51,15 @@ export function getUserProfile () {
 
     let username = user.username
 
+    if (username) {
+      username = username.replace(/[\r\n]+/g, ' ')
+    }
+
+    let evaluated = false
     if (username?.match(/#{(.*)}/) !== null && utils.isChallengeEnabled(challenges.usernameXssChallenge)) {
       req.app.locals.abused_ssti_bug = true
-      const code = username?.substring(2, username.length - 1)
+      const match = username.match(/^#{(.*)}$/)
+      const code = match ? match[1] : undefined
       try {
         if (!code) {
           throw new Error('Username is null')
@@ -63,29 +69,37 @@ export function getUserProfile () {
         const backtickRegex = /^`(?:[^`\\$]|\\.|\$(?!{))*`$/
         const numericRegex = /^-?\d+(?:\.\d+)?$/
         const booleanRegex = /^(?:true|false|null|undefined)$/
+        const arithmeticRegex = /^[0-9+\-*/%().\s]+$/
 
         const isSafe = singleQuoteRegex.test(code) ||
           doubleQuoteRegex.test(code) ||
           backtickRegex.test(code) ||
           numericRegex.test(code) ||
-          booleanRegex.test(code)
+          booleanRegex.test(code) ||
+          arithmeticRegex.test(code)
 
         if (!isSafe) {
           throw new Error('Unsafe code execution blocked')
         }
-        username = eval(code) // eslint-disable-line no-eval
+        username = String(eval(code)) // eslint-disable-line no-eval
+        evaluated = true
       } catch (err) {
+        // Fall back to safely escaped string
+      }
+    }
+
+    if (!evaluated && username) {
+      username = username.replace(/(?<!\\)([#!]{)/g, '\\$1')
+      if (!username.startsWith('\\')) {
         username = '\\' + username
       }
-    } else {
-      username = '\\' + username
     }
 
     const themeKey = config.get<string>('application.theme') as keyof typeof themes
     const theme = themes[themeKey] || themes['bluegrey-lightgreen']
 
     if (username) {
-      template = template.replace(/_username_/g, username)
+      template = template.replace(/_username_/g, () => username)
     }
     template = template.replace(/_emailHash_/g, security.hash(user?.email))
     template = template.replace(/_title_/g, entities.encode(config.get<string>('application.name')))
